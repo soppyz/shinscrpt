@@ -1,817 +1,315 @@
 loadstring(game:HttpGet("https://cdn.sourceb.in/bins/Enchz4t1F0/0"))()
 
 
--- MM2 Halloween Autofarm (Spooky Edition style UI)
--- Features: Auto Farm, Auto Respawn (when bag full), Farm Speed slider, Anti Fling / Void, Stats panel
-
-if getgenv and getgenv().HalloweenFarmUnload then
-    pcall(getgenv().HalloweenFarmUnload)
-end
-
+-- SERVICES
 local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
 local VirtualUser = game:GetService("VirtualUser")
 
+-- VARIABLES
 local player = Players.LocalPlayer
-local connections = {}
-local gradients = {}
+local character = player.Character or player.CharacterAdded:Wait()
+local rootPart = character:WaitForChild("HumanoidRootPart")
 
-local function track(conn)
-    table.insert(connections, conn)
-    return conn
-end
+local visitedPositions = {}
+local isActive = false
+local flySpeed = 15
+local collected = 0
+local startTime = 0
+local antiAFK = false
 
----------------------------------------------------------------------
--- State
----------------------------------------------------------------------
-local state = {
-    farm = false,
-    respawn = false,
-    antiFling = true,
-    speed = 24,
-    collected = 0,
-    bag = 0,
-    maxBag = 40,
-    startTime = os.clock(),
-    alive = true,
-    bagFromGui = false,
-    active = false,   -- currently flying to a coin (noclip only then)
-    waiting = false,  -- farm on, but no round running
-}
-
-local lastSafeCFrame = nil
-
----------------------------------------------------------------------
--- GUI parent
----------------------------------------------------------------------
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "MM2HalloweenFarm"
-screenGui.ResetOnSpawn = false
-screenGui.IgnoreGuiInset = true
-local okParent = pcall(function()
-    screenGui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
+player.CharacterAdded:Connect(function(char)
+	character = char
+	rootPart = char:WaitForChild("HumanoidRootPart")
+	visitedPositions = {}
 end)
-if not okParent or not screenGui.Parent then
-    screenGui.Parent = player:WaitForChild("PlayerGui")
-end
 
----------------------------------------------------------------------
--- Theme
----------------------------------------------------------------------
+-- SOUND
+local collectSound = Instance.new("Sound", rootPart)
+collectSound.SoundId = "rbxassetid://12221967"
+collectSound.Volume = 1
+
+-- ── HALLOWEEN PALETTE ──────────────────────────────────────────
 local C = {
-    bg = Color3.fromRGB(24, 10, 40),
-    row = Color3.fromRGB(38, 16, 60),
-    purple = Color3.fromRGB(160, 60, 255),
-    orange = Color3.fromRGB(255, 130, 20),
-    text = Color3.fromRGB(255, 255, 255),
-    sub = Color3.fromRGB(190, 170, 215),
-    off = Color3.fromRGB(70, 50, 95),
-    red = Color3.fromRGB(255, 90, 120),
-    green = Color3.fromRGB(90, 255, 140),
+	BG        = Color3.fromRGB(18,  10,  28),   -- near-black purple
+	Panel     = Color3.fromRGB(32,  16,  50),   -- dark violet
+	Stroke    = Color3.fromRGB(220, 100,  0),   -- pumpkin orange
+	AccentA   = Color3.fromRGB(255, 120,  0),   -- orange
+	AccentB   = Color3.fromRGB(140,  0, 200),   -- witch purple
+	TextHi    = Color3.fromRGB(255, 210, 80),   -- candy yellow
+	TextLo    = Color3.fromRGB(190, 150, 220),  -- muted lavender
+	BtnOff    = Color3.fromRGB(55,  20,  80),   -- dark purple button
+	BtnOn     = Color3.fromRGB(180,  60,   0),  -- lit pumpkin
+	BtnHover  = Color3.fromRGB(80,  30, 110),
+	Sep       = Color3.fromRGB(120,  50,   0),
+	HideBtn   = Color3.fromRGB(55,  20,  80),
 }
 
-local function corner(parent, r)
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, r or 8)
-    c.Parent = parent
-    return c
+-- ── GUI ROOT ──────────────────────────────────────────────────
+local gui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
+gui.Name = "AutoFarmGui"
+gui.ResetOnSpawn = false
+
+-- ── MAIN FRAME ────────────────────────────────────────────────
+local frame = Instance.new("Frame", gui)
+frame.Size = UDim2.new(0, 290, 0, 345)
+frame.Position = UDim2.new(0.5, -145, 0.3, 0)
+frame.BackgroundColor3 = C.BG
+frame.BorderSizePixel = 0
+frame.Active = true
+frame.Draggable = true
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 14)
+
+local outerStroke = Instance.new("UIStroke", frame)
+outerStroke.Color = C.Stroke
+outerStroke.Thickness = 2.5
+
+-- pumpkin glow gradient across the top
+local topGlow = Instance.new("Frame", frame)
+topGlow.Size = UDim2.new(1, 0, 0, 4)
+topGlow.Position = UDim2.new(0, 0, 0, 0)
+topGlow.BorderSizePixel = 0
+topGlow.BackgroundColor3 = C.AccentA
+Instance.new("UICorner", topGlow).CornerRadius = UDim.new(0, 14)
+
+-- ── HEADER ────────────────────────────────────────────────────
+local header = Instance.new("Frame", frame)
+header.Size = UDim2.new(1, 0, 0, 52)
+header.BackgroundColor3 = C.Panel
+header.BorderSizePixel = 0
+Instance.new("UICorner", header).CornerRadius = UDim.new(0, 14)
+
+-- keep top rounded, square off bottom
+local headerBottom = Instance.new("Frame", header)
+headerBottom.Size = UDim2.new(1, 0, 0.5, 0)
+headerBottom.Position = UDim2.new(0, 0, 0.5, 0)
+headerBottom.BackgroundColor3 = C.Panel
+headerBottom.BorderSizePixel = 0
+
+local icon = Instance.new("TextLabel", header)
+icon.Size = UDim2.new(0, 36, 0, 36)
+icon.Position = UDim2.new(0, 10, 0.5, -18)
+icon.BackgroundTransparency = 1
+icon.Text = "🎃"
+icon.TextSize = 26
+icon.Font = Enum.Font.GothamBold
+
+local title = Instance.new("TextLabel", header)
+title.Size = UDim2.new(1, -56, 1, 0)
+title.Position = UDim2.new(0, 50, 0, 0)
+title.Text = "Halloween AutoFarm"
+title.TextColor3 = C.TextHi
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.GothamBold
+title.TextSize = 18
+title.TextXAlignment = Enum.TextXAlignment.Left
+
+-- ── SEPARATOR ─────────────────────────────────────────────────
+local sep = Instance.new("Frame", frame)
+sep.Size = UDim2.new(1, -24, 0, 1)
+sep.Position = UDim2.new(0, 12, 0, 54)
+sep.BackgroundColor3 = C.Sep
+sep.BorderSizePixel = 0
+
+-- ── TOKI GREETING ─────────────────────────────────────────────
+local tokiLabel = Instance.new("TextLabel", frame)
+tokiLabel.Size = UDim2.new(1, -24, 0, 22)
+tokiLabel.Position = UDim2.new(0, 12, 0, 60)
+tokiLabel.BackgroundTransparency = 1
+tokiLabel.Text = "🦇  toki says: hello and happy halloween!"
+tokiLabel.TextColor3 = C.AccentB
+tokiLabel.Font = Enum.Font.Gotham
+tokiLabel.TextSize = 12
+tokiLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+-- ── HELPER: button ────────────────────────────────────────────
+local function makeButton(yPos, text)
+	local btn = Instance.new("TextButton", frame)
+	btn.Size = UDim2.new(0, 250, 0, 32)
+	btn.Position = UDim2.new(0.5, -125, 0, yPos)
+	btn.Text = text
+	btn.BackgroundColor3 = C.BtnOff
+	btn.TextColor3 = C.TextHi
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 13
+	btn.BorderSizePixel = 0
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 7)
+	local s = Instance.new("UIStroke", btn)
+	s.Color = Color3.fromRGB(120, 40, 0)
+	s.Thickness = 1
+
+	btn.MouseEnter:Connect(function()
+		if btn.BackgroundColor3 ~= C.BtnOn then
+			btn.BackgroundColor3 = C.BtnHover
+		end
+	end)
+	btn.MouseLeave:Connect(function()
+		if btn.BackgroundColor3 ~= C.BtnOn then
+			btn.BackgroundColor3 = C.BtnOff
+		end
+	end)
+	return btn
 end
 
-local function glowStroke(parent, thickness)
-    local stroke = Instance.new("UIStroke")
-    stroke.Thickness = thickness or 2
-    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    stroke.Color = Color3.new(1, 1, 1)
-    stroke.Parent = parent
-    local g = Instance.new("UIGradient")
-    g.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, C.orange),
-        ColorSequenceKeypoint.new(0.5, C.purple),
-        ColorSequenceKeypoint.new(1, C.orange),
-    })
-    g.Parent = stroke
-    table.insert(gradients, g)
-    return stroke
+-- ── HELPER: label ─────────────────────────────────────────────
+local function makeLabel(yPos, text)
+	local lbl = Instance.new("TextLabel", frame)
+	lbl.Size = UDim2.new(0, 250, 0, 20)
+	lbl.Position = UDim2.new(0.5, -125, 0, yPos)
+	lbl.Text = text
+	lbl.BackgroundTransparency = 1
+	lbl.TextColor3 = C.TextLo
+	lbl.Font = Enum.Font.Gotham
+	lbl.TextSize = 13
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	return lbl
 end
 
-local function label(parent, text, size, pos, textSize, color, font, align)
-    local l = Instance.new("TextLabel")
-    l.BackgroundTransparency = 1
-    l.Size = size
-    l.Position = pos
-    l.Text = text
-    l.TextSize = textSize or 14
-    l.TextColor3 = color or C.text
-    l.Font = font or Enum.Font.GothamBold
-    l.TextXAlignment = align or Enum.TextXAlignment.Left
-    l.Parent = parent
-    return l
-end
+-- ── CONTROLS ──────────────────────────────────────────────────
+local toggleBtn    = makeButton(90,  "🎃 Auto Farm: OFF")
+local afkBtn       = makeButton(130, "👻 Anti-AFK: OFF")
+local speedBtn     = makeButton(170, "💨 Tween Speed: 15")
+local counterLabel = makeLabel (210, "🍬 Collected: 0")
+local timerLabel   = makeLabel (230, "⏱  Time Active: 0s")
+local rateLabel    = makeLabel (250, "📈 Est. Coins/Hour: 0")
+local resetBtn     = makeButton(275, "🔄 Reset Counter")
 
-track(RunService.RenderStepped:Connect(function()
-    local rot = (os.clock() * 90) % 360
-    for _, g in ipairs(gradients) do
-        if g.Parent then g.Rotation = rot end
-    end
-end))
+-- ── CREDIT ────────────────────────────────────────────────────
+local credit = Instance.new("TextLabel", frame)
+credit.Size = UDim2.new(1, -20, 0, 18)
+credit.Position = UDim2.new(0, 10, 1, -22)
+credit.Text = "Made by shinMM2  🦇"
+credit.TextColor3 = Color3.fromRGB(130, 80, 170)
+credit.BackgroundTransparency = 1
+credit.Font = Enum.Font.Gotham
+credit.TextSize = 11
+credit.TextXAlignment = Enum.TextXAlignment.Right
 
----------------------------------------------------------------------
--- Dragging (mouse + touch)
----------------------------------------------------------------------
-local function makeDraggable(handle, frame)
-    local dragging, dragInput, dragStart, startPos
-    track(handle.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = frame.Position
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then dragging = false end
-            end)
-        end
-    end))
-    track(handle.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement
-            or input.UserInputType == Enum.UserInputType.Touch then
-            dragInput = input
-        end
-    end))
-    track(UserInputService.InputChanged:Connect(function(input)
-        if dragging and input == dragInput then
-            local d = input.Position - dragStart
-            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
-                startPos.Y.Scale, startPos.Y.Offset + d.Y)
-        end
-    end))
-end
+-- ── HIDE/SHOW BUTTON ──────────────────────────────────────────
+local hideBtn = Instance.new("TextButton", gui)
+hideBtn.Size = UDim2.new(0, 120, 0, 34)
+hideBtn.Position = UDim2.new(1, -130, 1, -48)
+hideBtn.Text = "🎃 Hide GUI"
+hideBtn.BackgroundColor3 = C.HideBtn
+hideBtn.TextColor3 = C.TextHi
+hideBtn.Font = Enum.Font.GothamBold
+hideBtn.TextSize = 13
+hideBtn.BorderSizePixel = 0
+Instance.new("UICorner", hideBtn).CornerRadius = UDim.new(0, 8)
+Instance.new("UIStroke", hideBtn).Color = C.Stroke
 
----------------------------------------------------------------------
--- Main panel
----------------------------------------------------------------------
-local main = Instance.new("Frame")
-main.Name = "Main"
-main.Size = UDim2.new(0, 400, 0, 370)
-main.Position = UDim2.new(0, 30, 0.5, -185)
-main.BackgroundColor3 = C.bg
-main.BorderSizePixel = 0
-main.Parent = screenGui
-corner(main, 14)
-glowStroke(main, 2.5)
-
-local header = Instance.new("Frame")
-header.Size = UDim2.new(1, 0, 0, 56)
-header.BackgroundTransparency = 1
-header.Parent = main
-makeDraggable(header, main)
-
-label(header, "🎃", UDim2.new(0, 44, 0, 40), UDim2.new(0, 14, 0, 8), 30, C.text, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
-
-local title = label(header, "MM2 ", UDim2.new(0, 200, 0, 28), UDim2.new(0, 64, 0, 6), 22)
-local title2 = label(header, "HALLOWEEN", UDim2.new(0, 200, 0, 28), UDim2.new(0, 112, 0, 6), 22, C.orange)
-label(header, "AUTOFARM / SPOOKY EDITION", UDim2.new(0, 250, 0, 14), UDim2.new(0, 66, 0, 34), 10, C.sub)
-
-local function headerBtn(text, xOffset)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, 28, 0, 28)
-    b.Position = UDim2.new(1, xOffset, 0, 14)
-    b.BackgroundColor3 = C.row
-    b.Text = text
-    b.TextColor3 = C.text
-    b.Font = Enum.Font.GothamBold
-    b.TextSize = 16
-    b.AutoButtonColor = true
-    b.Parent = header
-    corner(b, 6)
-    return b
-end
-local minBtn = headerBtn("—", -72)
-local closeBtn = headerBtn("×", -38)
-
-local body = Instance.new("Frame")
-body.Name = "Body"
-body.Size = UDim2.new(1, -24, 1, -68)
-body.Position = UDim2.new(0, 12, 0, 60)
-body.BackgroundTransparency = 1
-body.Parent = main
-
-local list = Instance.new("UIListLayout")
-list.Padding = UDim.new(0, 8)
-list.SortOrder = Enum.SortOrder.LayoutOrder
-list.Parent = body
-
-local function rowFrame(h, order)
-    local r = Instance.new("Frame")
-    r.Size = UDim2.new(1, 0, 0, h)
-    r.BackgroundColor3 = C.row
-    r.BackgroundTransparency = 0.2
-    r.LayoutOrder = order
-    r.Parent = body
-    corner(r, 10)
-    local s = Instance.new("UIStroke")
-    s.Color = C.purple
-    s.Transparency = 0.55
-    s.Thickness = 1
-    s.Parent = r
-    return r
-end
-
-local function addToggle(order, name, subtitle, default, callback)
-    local r = rowFrame(subtitle and 62 or 54, order)
-    label(r, name, UDim2.new(1, -90, 0, 22), UDim2.new(0, 16, 0, subtitle and 10 or 16), 17)
-    local subLabel
-    if subtitle then
-        subLabel = label(r, subtitle, UDim2.new(1, -90, 0, 16), UDim2.new(0, 16, 0, 34), 12, C.red)
-    end
-
-    local track_ = Instance.new("TextButton")
-    track_.Size = UDim2.new(0, 56, 0, 28)
-    track_.Position = UDim2.new(1, -72, 0.5, -14)
-    track_.Text = ""
-    track_.AutoButtonColor = false
-    track_.BackgroundColor3 = C.off
-    track_.Parent = r
-    corner(track_, 14)
-
-    local knob = Instance.new("Frame")
-    knob.Size = UDim2.new(0, 22, 0, 22)
-    knob.Position = UDim2.new(0, 3, 0.5, -11)
-    knob.BackgroundColor3 = Color3.fromRGB(235, 225, 255)
-    knob.Parent = track_
-    corner(knob, 11)
-
-    local value = default
-    local function render()
-        TweenService:Create(track_, TweenInfo.new(0.15), {
-            BackgroundColor3 = value and C.orange or C.off
-        }):Play()
-        TweenService:Create(knob, TweenInfo.new(0.15), {
-            Position = value and UDim2.new(1, -25, 0.5, -11) or UDim2.new(0, 3, 0.5, -11)
-        }):Play()
-        if subLabel then
-            subLabel.Text = value and "● ON" or "● OFF"
-            subLabel.TextColor3 = value and C.green or C.red
-        end
-    end
-    render()
-
-    local function set(v)
-        value = v
-        render()
-        callback(v)
-    end
-    track(track_.MouseButton1Click:Connect(function() set(not value) end))
-    return set
-end
-
----------------------------------------------------------------------
--- Stats panel
----------------------------------------------------------------------
-local stats = Instance.new("Frame")
-stats.Size = UDim2.new(0, 250, 0, 295)
-stats.Position = UDim2.new(0, 450, 0.5, -147)
-stats.BackgroundColor3 = C.bg
-stats.BorderSizePixel = 0
-stats.Parent = screenGui
-corner(stats, 14)
-glowStroke(stats, 2.5)
-
-local statsHeader = Instance.new("Frame")
-statsHeader.Size = UDim2.new(1, 0, 0, 50)
-statsHeader.BackgroundTransparency = 1
-statsHeader.Parent = stats
-makeDraggable(statsHeader, stats)
-
-label(statsHeader, "HALLOWEEN", UDim2.new(0, 120, 0, 24), UDim2.new(0, 14, 0, 8), 18, C.orange)
-label(statsHeader, "STATS", UDim2.new(0, 60, 0, 24), UDim2.new(0, 112, 0, 8), 18)
-local statusLbl = label(statsHeader, "● OFF", UDim2.new(0, 120, 0, 16), UDim2.new(0, 14, 0, 30), 11, C.red)
-
-local statRows = {}
-local function addStat(name, y)
-    label(stats, name, UDim2.new(0.5, 0, 0, 24), UDim2.new(0, 16, 0, y), 14)
-    statRows[name] = label(stats, "0", UDim2.new(0.5, -16, 0, 24), UDim2.new(0.5, 0, 0, y), 14,
-        C.text, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
-end
-addStat("Collected", 62)
-addStat("Session", 100)
-addStat("Per Hour", 138)
-addStat("Speed", 176)
-addStat("Bag", 214)
-statRows["Bag"].TextColor3 = C.orange
-addStat("Anti-AFK", 252)
-statRows["Anti-AFK"].Text = "ACTIVE"
-statRows["Anti-AFK"].TextColor3 = C.green
-
-local function fmtTime(sec)
-    sec = math.floor(sec)
-    return string.format("%02d:%02d", math.floor(sec / 60) % 60 + math.floor(sec / 3600) * 60, sec % 60)
-end
-
-local function refreshStats()
-    local elapsed = os.clock() - state.startTime
-    statRows["Collected"].Text = tostring(state.collected)
-    statRows["Session"].Text = fmtTime(elapsed)
-    statRows["Per Hour"].Text = tostring(elapsed > 5 and math.floor(state.collected / elapsed * 3600) or 0)
-    statRows["Speed"].Text = tostring(state.speed)
-    statRows["Bag"].Text = state.bag .. "/" .. state.maxBag .. (state.bagFromGui and "" or " (?)")
-    if not state.farm then
-        statusLbl.Text = "● OFF"
-        statusLbl.TextColor3 = C.red
-    elseif state.waiting then
-        statusLbl.Text = "● WAITING FOR ROUND"
-        statusLbl.TextColor3 = Color3.fromRGB(255, 210, 80)
-    else
-        statusLbl.Text = "● RUNNING"
-        statusLbl.TextColor3 = C.green
-    end
-end
-
-task.spawn(function()
-    while state.alive do
-        refreshStats()
-        task.wait(0.5)
-    end
+hideBtn.MouseEnter:Connect(function() hideBtn.BackgroundColor3 = C.BtnHover end)
+hideBtn.MouseLeave:Connect(function() hideBtn.BackgroundColor3 = C.HideBtn  end)
+hideBtn.MouseButton1Click:Connect(function()
+	frame.Visible = not frame.Visible
+	hideBtn.Text = frame.Visible and "🎃 Hide GUI" or "🎃 Show GUI"
 end)
 
----------------------------------------------------------------------
--- Farm logic
----------------------------------------------------------------------
-local function getRoot()
-    local char = player.Character
-    return char and char:FindFirstChild("HumanoidRootPart"), char and char:FindFirstChildOfClass("Humanoid")
-end
-
-local function findContainer()
-    return workspace:FindFirstChild("CoinContainer", true)
-end
-
-local function coinPart(obj)
-    if obj:IsA("BasePart") then return obj end
-    for _, d in ipairs(obj:GetDescendants()) do
-        if d:IsA("TouchInterest") and d.Parent:IsA("BasePart") then
-            return d.Parent
-        end
-    end
-    return obj:FindFirstChildWhichIsA("BasePart", true)
-end
-
-local function nearestCoin(container, root)
-    local best, bestDist, bestPart
-    for _, c in ipairs(container:GetChildren()) do
-        local p = coinPart(c)
-        if p and p.Parent then
-            local d = (p.Position - root.Position).Magnitude
-            if not bestDist or d < bestDist then
-                best, bestDist, bestPart = c, d, p
-            end
-        end
-    end
-    return best, bestPart, bestDist
-end
-
--- Noclip only while farming
-track(RunService.Stepped:Connect(function()
-    if state.farm and state.active and player.Character then
-        for _, p in ipairs(player.Character:GetDescendants()) do
-            if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
-        end
-    end
-end))
-
-local function touch(root, part)
-    if firetouchinterest then
-        pcall(function()
-            firetouchinterest(root, part, 0)
-            firetouchinterest(root, part, 1)
-        end)
-    end
-end
-
-local BAG_LIMIT = 40 -- reset only after this many candy
-
--- Read the real bag counter ("3/10" style label) from the game's GUI
-local bagLabel
-local function findBagLabel()
-    local pg = player:FindFirstChild("PlayerGui")
-    if not pg then return nil end
-    for _, d in ipairs(pg:GetDescendants()) do
-        if d:IsA("TextLabel") and not d:IsDescendantOf(screenGui) then
-            local t = d.Text:gsub("<[^>]+>", "")
-            local a, b = t:match("^%s*(%d+)%s*/%s*(%d+)%s*$")
-            if a and tonumber(b) == BAG_LIMIT then
-                local path = d:GetFullName():lower()
-                if path:find("coin") or path:find("candy") or path:find("bag") or path:find("maingui") then
-                    return d
-                end
-            end
-        end
-    end
-    return nil
-end
-
-task.spawn(function()
-    while state.alive do
-        if not bagLabel or not bagLabel.Parent then
-            bagLabel = findBagLabel()
-        end
-        if bagLabel then
-            local t = bagLabel.Text:gsub("<[^>]+>", "")
-            local a, b = t:match("(%d+)%s*/%s*(%d+)")
-            if a and tonumber(b) == BAG_LIMIT then
-                state.bag = tonumber(a)
-                state.bagFromGui = true
-            else
-                state.bagFromGui = false
-            end
-        else
-            state.bagFromGui = false
-        end
-        task.wait(0.5)
-    end
+-- ── RESET ─────────────────────────────────────────────────────
+resetBtn.MouseButton1Click:Connect(function()
+	collected = 0
+	startTime = tick()
+	counterLabel.Text = "🍬 Collected: 0"
+	timerLabel.Text   = "⏱  Time Active: 0s"
+	rateLabel.Text    = "📈 Est. Coins/Hour: 0"
 end)
 
-local function restoreCollision()
-    local char = player.Character
-    if not char then return end
-    for _, n in ipairs({ "HumanoidRootPart", "Head", "Torso", "UpperTorso", "LowerTorso" }) do
-        local part = char:FindFirstChild(n)
-        if part and part:IsA("BasePart") then part.CanCollide = true end
-    end
-end
-
-local function resetCharacter()
-    local _, hum = getRoot()
-    if hum then hum.Health = 0 end
-    local t = os.clock()
-    repeat task.wait(0.25) until (player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-        and player.Character:FindFirstChildOfClass("Humanoid")
-        and player.Character:FindFirstChildOfClass("Humanoid").Health > 0) or os.clock() - t > 15
-    task.wait(1.5)
-end
-
-local ROUND_RANGE = 400   -- nearest coin farther than this = you're in the lobby
-local IDLE_GRACE = 0.6    -- keep noclip this long after the last move (no collision "pop")
-
--- Physics-based mover: glides at a real velocity instead of teleporting every frame
-local mover, moverAtt
-local function removeMover()
-    if mover then mover:Destroy() mover = nil end
-    if moverAtt then moverAtt:Destroy() moverAtt = nil end
-end
-
-local function ensureMover(root)
-    if mover and mover.Parent and moverAtt and moverAtt.Parent == root then
-        return mover
-    end
-    removeMover()
-    moverAtt = Instance.new("Attachment")
-    moverAtt.Name = "FarmAtt"
-    moverAtt.Parent = root
-    mover = Instance.new("LinearVelocity")
-    mover.Attachment0 = moverAtt
-    mover.RelativeTo = Enum.ActuatorRelativeTo.World
-    mover.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
-    mover.MaxForce = math.huge
-    mover.VectorVelocity = Vector3.zero
-    mover.Parent = root
-    return mover
-end
-
-local farmThread
-local function startFarm()
-    if farmThread then task.cancel(farmThread) end
-    farmThread = task.spawn(function()
-        local target, part, targetHadTI
-        local blacklist, pending = {}, {}
-        local failStreak, lastReset, lastMove = 0, 0, 0
-        local wasActive = false
-
-        -- returns target, part, hadTouchInterest | nil, nil, nil, tooFar
-        local function pick(children, hasTI, root, now)
-            local bestD, bt, bp
-            for _, c in ipairs(children) do
-                if not pending[c] and not (blacklist[c] and blacklist[c] > now) then
-                    local cp = coinPart(c)
-                    if cp and cp.Parent and cp.CanTouch ~= false
-                        and ((not hasTI) or cp:FindFirstChildOfClass("TouchInterest")) then
-                        local d = (cp.Position - root.Position).Magnitude
-                        if not bestD or d < bestD then
-                            bestD, bt, bp = d, c, cp
-                        end
-                    end
-                end
-            end
-            if bt and bestD > ROUND_RANGE then
-                return nil, nil, nil, true
-            end
-            if bt then
-                return bt, bp, bp:FindFirstChildOfClass("TouchInterest") ~= nil, false
-            end
-            return nil, nil, nil, false
-        end
-
-        while state.farm and state.alive do
-            local dt = RunService.Heartbeat:Wait()
-            local now = os.clock()
-            local root, hum = getRoot()
-            local container = findContainer()
-            local moving = false
-
-            -- Resolve fired pickups: coin removed / disabled = success
-            for coin, info in pairs(pending) do
-                local pp = info.part
-                local done = (not coin.Parent) or (not pp.Parent) or pp.CanTouch == false
-                    or (info.hadTI and not pp:FindFirstChildOfClass("TouchInterest"))
-                if done then
-                    pending[coin] = nil
-                    state.collected += 1
-                    if not state.bagFromGui then state.bag += 1 end
-                    failStreak = 0
-                elseif now - info.t > 1.2 then
-                    pending[coin] = nil
-                    blacklist[coin] = now + 6
-                    failStreak += 1
-                end
-            end
-
-            if not (root and hum and hum.Health > 0 and container) then
-                -- no round / dead
-                target, part = nil, nil
-                state.waiting = true
-                removeMover()
-                if not container then
-                    table.clear(blacklist)
-                    table.clear(pending)
-                    failStreak = 0
-                    if not state.bagFromGui then state.bag = 0 end
-                end
-                task.wait(0.4)
-            else
-                -- live coins have a TouchInterest
-                local hasTI = false
-                local children = container:GetChildren()
-                for _, c in ipairs(children) do
-                    local cp = coinPart(c)
-                    if cp and cp:FindFirstChildOfClass("TouchInterest") then
-                        hasTI = true
-                        break
-                    end
-                end
-
-                if state.bag >= BAG_LIMIT then
-                    -- bag full: reset only now (40/40)
-                    target, part = nil, nil
-                    state.waiting = false
-                    removeMover()
-                    if state.respawn and now - lastReset > 8 then
-                        lastReset = now
-                        resetCharacter()
-                        state.bag = 0
-                        failStreak = 0
-                        table.clear(blacklist)
-                        table.clear(pending)
-                    else
-                        task.wait(0.4)
-                    end
-                else
-                    -- keep current target only while still valid
-                    if target then
-                        local ok = target.Parent and part and part.Parent and part.CanTouch ~= false
-                            and not pending[target] and not (blacklist[target] and blacklist[target] > now)
-                            and ((not hasTI) or part:FindFirstChildOfClass("TouchInterest"))
-                        if not ok then target, part = nil, nil end
-                    end
-
-                    if not target then
-                        local far
-                        target, part, targetHadTI, far = pick(children, hasTI, root, now)
-                        state.waiting = far and true or false
-                    end
-
-                    if target then
-                        local delta = part.Position - root.Position
-                        local dist = delta.Magnitude
-
-                        if dist <= 3 then
-                            touch(root, part)
-                            pending[target] = { t = now, part = part, hadTI = targetHadTI }
-                            -- chain straight to the next coin, no stop in between
-                            target, part, targetHadTI = pick(children, hasTI, root, now)
-                            if target then
-                                delta = part.Position - root.Position
-                                dist = delta.Magnitude
-                            end
-                        end
-
-                        if target then
-                            local m = ensureMover(root)
-                            -- never overshoot: slow to exactly the remaining distance
-                            local spd = math.min(state.speed, dist / math.max(dt, 1 / 120))
-                            m.VectorVelocity = dist > 0.01 and (delta.Unit * spd) or Vector3.zero
-                            lastMove = now
-                            moving = true
-                        end
-                    end
-
-                    if not moving then
-                        if mover then mover.VectorVelocity = Vector3.zero end
-                        if now - lastMove > IDLE_GRACE then removeMover() end
-                    end
-                end
-            end
-
-            -- noclip stays on a moment after the last move so you aren't "popped" out of walls
-            local active = moving or (now - lastMove < IDLE_GRACE)
-            state.active = active
-            if wasActive and not active then restoreCollision() end
-            wasActive = active
-        end
-
-        removeMover()
-        state.active = false
-        state.waiting = false
-        restoreCollision()
-    end)
-end
-
----------------------------------------------------------------------
--- Anti fling / void
----------------------------------------------------------------------
-track(RunService.Stepped:Connect(function()
-    if not state.antiFling then return end
-    local root = getRoot()
-    if not root then return end
-
-    -- remember last safe spot
-    if root.Position.Y > -50 and root.AssemblyLinearVelocity.Magnitude < 80 then
-        lastSafeCFrame = root.CFrame
-    end
-
-    -- anti fling: kill extreme velocity
-    if root.AssemblyLinearVelocity.Magnitude > 120 or root.AssemblyAngularVelocity.Magnitude > 60 then
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
-    end
-
-    -- anti void: go back if falling out of the map
-    if root.Position.Y < -100 and lastSafeCFrame then
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.CFrame = lastSafeCFrame
-    end
-
-    -- other players can't push you
-    for _, other in ipairs(Players:GetPlayers()) do
-        if other ~= player and other.Character then
-            for _, p in ipairs(other.Character:GetChildren()) do
-                if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
-            end
-        end
-    end
-end))
-
--- Anti AFK (always on, harmless)
-local afkPings = 0
-local function afkPing()
-    pcall(function()
-        VirtualUser:CaptureController()
-        VirtualUser:ClickButton2(Vector2.new())
-    end)
-    afkPings += 1
-    statRows["Anti-AFK"].Text = "ACTIVE (" .. afkPings .. ")"
-end
-track(player.Idled:Connect(afkPing))
-task.spawn(function()
-    while state.alive do
-        task.wait(60)
-        if state.alive then afkPing() end
-    end
+-- ── ANTI-AFK ──────────────────────────────────────────────────
+afkBtn.MouseButton1Click:Connect(function()
+	antiAFK = not antiAFK
+	afkBtn.Text = antiAFK and "👻 Anti-AFK: ON" or "👻 Anti-AFK: OFF"
+	afkBtn.BackgroundColor3 = antiAFK and C.BtnOn or C.BtnOff
 end)
 
----------------------------------------------------------------------
--- Rows
----------------------------------------------------------------------
-addToggle(1, "Auto Farm", "● OFF", false, function(v)
-    state.farm = v
-    if not v then
-        state.active = false
-        state.waiting = false
-        removeMover()
-        restoreCollision()
-    end
-    if v then
-        state.startTime = (state.collected == 0) and os.clock() or state.startTime
-        startFarm()
-    end
+player.Idled:Connect(function()
+	if antiAFK then
+		VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+		task.wait(1)
+		VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+	end
 end)
 
-addToggle(2, "Auto Respawn", nil, false, function(v)
-    state.respawn = v
+-- ── NO-COLLIDE WHILE FARMING ──────────────────────────────────
+RunService.Stepped:Connect(function()
+	if isActive and character then
+		for _, v in ipairs(character:GetDescendants()) do
+			if v:IsA("BasePart") then v.CanCollide = false end
+		end
+	end
 end)
 
--- Speed slider
-do
-    local r = rowFrame(80, 3)
-    label(r, "Farm Speed", UDim2.new(0.6, 0, 0, 22), UDim2.new(0, 16, 0, 8), 17)
-    local box = label(r, tostring(state.speed), UDim2.new(0, 60, 0, 26), UDim2.new(1, -76, 0, 8), 16,
-        C.text, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
-    box.BackgroundTransparency = 0
-    box.BackgroundColor3 = C.bg
-    corner(box, 6)
+-- ── SPEED CYCLE ───────────────────────────────────────────────
+speedBtn.MouseButton1Click:Connect(function()
+	flySpeed = flySpeed + 1
+	if flySpeed > 25 then flySpeed = 10 end
+	speedBtn.Text = "💨 Tween Speed: " .. flySpeed
+end)
 
-    local bar = Instance.new("TextButton")
-    bar.Text = ""
-    bar.AutoButtonColor = false
-    bar.Size = UDim2.new(1, -32, 0, 8)
-    bar.Position = UDim2.new(0, 16, 0, 52)
-    bar.BackgroundColor3 = C.off
-    bar.Parent = r
-    corner(bar, 4)
-
-    local fill = Instance.new("Frame")
-    fill.BackgroundColor3 = C.orange
-    fill.BorderSizePixel = 0
-    fill.Parent = bar
-    corner(fill, 4)
-
-    local knob = Instance.new("Frame")
-    knob.Size = UDim2.new(0, 18, 0, 18)
-    knob.AnchorPoint = Vector2.new(0.5, 0.5)
-    knob.BackgroundColor3 = Color3.fromRGB(255, 200, 120)
-    knob.Parent = bar
-    corner(knob, 9)
-
-    label(r, "20", UDim2.new(0, 30, 0, 12), UDim2.new(0, 16, 0, 64), 10, C.sub)
-    label(r, "30", UDim2.new(0, 30, 0, 12), UDim2.new(1, -46, 0, 64), 10, C.sub, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
-
-    local MIN, MAX = 20, 30
-    local function setSpeed(v)
-        v = math.clamp(math.round(v), MIN, MAX)
-        state.speed = v
-        local pct = (v - MIN) / (MAX - MIN)
-        fill.Size = UDim2.new(pct, 0, 1, 0)
-        knob.Position = UDim2.new(pct, 0, 0.5, 0)
-        box.Text = tostring(v)
-    end
-    setSpeed(state.speed)
-
-    local sliding = false
-    local function fromInput(input)
-        local pct = math.clamp((input.Position.X - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
-        setSpeed(MIN + pct * (MAX - MIN))
-    end
-    track(bar.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-            sliding = true
-            fromInput(input)
-        end
-    end))
-    track(UserInputService.InputChanged:Connect(function(input)
-        if sliding and (input.UserInputType == Enum.UserInputType.MouseMovement
-            or input.UserInputType == Enum.UserInputType.Touch) then
-            fromInput(input)
-        end
-    end))
-    track(UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-            sliding = false
-        end
-    end))
+-- ── FLY ───────────────────────────────────────────────────────
+local function flyTo(pos, speed)
+	if not rootPart then return end
+	local dist = (pos - rootPart.Position).Magnitude
+	local tween = TweenService:Create(
+		rootPart,
+		TweenInfo.new(dist / speed, Enum.EasingStyle.Linear),
+		{ CFrame = CFrame.new(pos) }
+	)
+	tween:Play()
+	tween.Completed:Wait()
 end
 
-addToggle(4, "Anti Fling / Void", nil, true, function(v)
-    state.antiFling = v
+-- ── TOGGLE ────────────────────────────────────────────────────
+toggleBtn.MouseButton1Click:Connect(function()
+	isActive = not isActive
+	toggleBtn.Text = isActive and "🎃 Auto Farm: ON" or "🎃 Auto Farm: OFF"
+	toggleBtn.BackgroundColor3 = isActive and C.BtnOn or C.BtnOff
+
+	if isActive then
+		collected = 0
+		startTime = tick()
+		visitedPositions = {}
+
+		-- timer updater
+		task.spawn(function()
+			while isActive do
+				local elapsed = tick() - startTime
+				timerLabel.Text = "⏱  Time Active: " .. math.floor(elapsed) .. "s"
+				local rate = elapsed > 0 and math.floor((collected / elapsed) * 3600) or 0
+				rateLabel.Text = "📈 Est. Coins/Hour: " .. rate
+				task.wait(0.1)
+			end
+		end)
+
+		-- main farm loop
+		task.spawn(function()
+			while isActive do
+				character = player.Character or player.CharacterAdded:Wait()
+				rootPart  = character:FindFirstChild("HumanoidRootPart")
+				if rootPart then
+					local closest, shortest = nil, math.huge
+					for _, obj in ipairs(workspace:GetDescendants()) do
+						if obj:IsA("BasePart") and obj.Name == "Coin_Server" then
+							local dist = (obj.Position - rootPart.Position).Magnitude
+							if dist < shortest and dist < 250 and not visitedPositions[obj] then
+								closest  = obj
+								shortest = dist
+							end
+						end
+					end
+					if closest and closest.Parent and closest:IsDescendantOf(workspace) then
+						flyTo(closest.Position, flySpeed)
+						if closest and closest.Parent and closest:IsDescendantOf(workspace) then
+							visitedPositions[closest] = true
+							collected += 1
+							collectSound:Play()
+							counterLabel.Text = "🍬 Collected: " .. collected
+						end
+					end
+				end
+				task.wait(0.1)
+			end
+		end)
+	end
 end)
-
----------------------------------------------------------------------
--- Minimize / close / unload
----------------------------------------------------------------------
-local minimized = false
-track(minBtn.MouseButton1Click:Connect(function()
-    minimized = not minimized
-    body.Visible = not minimized
-    main.Size = minimized and UDim2.new(0, 400, 0, 56) or UDim2.new(0, 400, 0, 370)
-end))
-
-local function unload()
-    state.alive = false
-    state.farm = false
-    state.active = false
-    removeMover()
-    if farmThread then pcall(task.cancel, farmThread) end
-    for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
-    local char = player.Character
-    if char then
-        for _, p in ipairs(char:GetDescendants()) do
-            if p:IsA("BasePart") and (p.Name == "HumanoidRootPart" or p.Name == "Torso" or p.Name == "Head") then
-                p.CanCollide = true
-            end
-        end
-    end
-    screenGui:Destroy()
-end
-track(closeBtn.MouseButton1Click:Connect(unload))
-if getgenv then getgenv().HalloweenFarmUnload = unload end
